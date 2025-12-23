@@ -1,0 +1,189 @@
+---
+title: "Values"
+output: html_document
+---
+
+## load file locations
+```{r include=FALSE}
+rm(list=ls())
+project.folder = paste0(print(here::here()),'/')
+source(paste0(project.folder,'create_folder_structure.R'))
+source(paste0(functions.folder,'script_initiate.R'))
+```
+
+## Load Packages
+```{r}
+library(dplyr)
+```
+
+## Values (Pertaining to figure 1)
+```{r}
+# Shapefile
+
+shapefile.data <- readRDS(paste0(project.folder, "data/processed/shapefile_data_all.rds"))
+
+# WBGT Regression
+
+dat.wbgt.summarised.regression <- readRDS(
+  paste0(wbgt.folder, 'weighted_area_raster_native_wbgtmax_daily_',
+         start_year_wbgt, '_', end_year_wbgt, '_regression_analysis.rds')
+) %>%
+  mutate(native_id = as.character(native_id))
+
+# State Population
+
+state_pop <- readRDS(paste0(project.folder, "data/processed/state_population_summary.rds"))
+
+# WBGT over time
+
+dat.wbgt.summarised <- readRDS(
+  paste0(wbgt.folder, 'weighted_area_raster_native_wbgtmax_daily_',
+         start_year_wbgt, '_', end_year_wbgt, '_over_time.rds')
+) %>%
+  mutate(native_id = as.character(native_id))
+
+message("Data Loaded\n")
+message("Potentially hazardous heat per standard environmental epidemiological research is defined as WBGT > 28°C threshold")
+
+# Territories with increasing dangerous heat days
+
+territories_with_trends <- dat.wbgt.summarised.regression %>%
+  left_join(shapefile.data, by = c('native_id' = 'GEOID')) %>%
+  filter(!is.na(POP_2020), POP_2020 > 0)
+
+territories_increasing_28 <- territories_with_trends %>%
+  filter(total_change_wbgt_28 > 0)
+
+n_increasing <- nrow(territories_increasing_28)
+n_total <- nrow(territories_with_trends)
+pct_increasing <- 100 * n_increasing / n_total
+
+message(sprintf("Territories with increasing heat days (WBGT > 28°C): %d out of %d (%.1f%%)\n",
+            n_increasing, n_total, pct_increasing))
+
+# Geographic distribution 
+
+increasing_by_state <- territories_increasing_28 %>%
+  group_by(STATE_NAME) %>%
+  summarise(
+    n_territories = n(),
+    total_pop = sum(POP_2020, na.rm = TRUE),
+    mean_increase = mean(total_change_wbgt_28, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_territories))
+
+print(head(increasing_by_state, 10))
+
+# Person-day exposure 
+
+dat.wbgt.with.pop <- dat.wbgt.summarised %>%
+  left_join(shapefile.data, by = c('native_id' = 'GEOID')) %>%
+  filter(!is.na(POP_2020), POP_2020 > 0)
+
+years_wbgtmax <- sort(unique(dat.wbgt.with.pop$year))
+last_5_years <- years_wbgtmax[(length(years_wbgtmax) - 4):length(years_wbgtmax)]
+
+exposure_by_state <- dat.wbgt.with.pop %>%
+  filter(year %in% last_5_years) %>%
+  group_by(STATE_NAME, FUNCSTAT) %>%
+  summarise(
+    population = sum(POP_2020, na.rm = TRUE),
+    wbgt_28_days = weighted.mean(wbgt_28, POP_2020, na.rm = TRUE),
+    person_days = wbgt_28_days * population,
+    .groups = "drop"
+  ) %>%
+  group_by(STATE_NAME) %>%
+  summarise(
+    total_pop = sum(population),
+    total_person_days = sum(person_days),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    pct_pop = 100 * total_pop / sum(total_pop),
+    pct_exposure = 100 * total_person_days / sum(total_person_days)
+  ) %>%
+  arrange(desc(total_person_days))
+
+top_2_states <- head(exposure_by_state, 2)
+top_2_combined_exposure <- sum(top_2_states$pct_exposure)
+top_2_combined_pop <- sum(top_2_states$pct_pop)
+
+message("   Top 2 states: ", paste(top_2_states$STATE_NAME, collapse = " and "))
+message("   Combined exposure: ", sprintf("%.1f%%", top_2_combined_exposure))
+message("   Combined population: ", sprintf("%.1f%%", top_2_combined_pop))
+```
+
+## Values (Pertaining to figure 2)
+```{r}
+
+# Panel a - Native vs State comparison
+message("Panel a - Native vs State Disparity:\n")
+message("  States: ", n_distinct(dat.wbgt.summarised.merged.weighted.native.state$STATE_NAME) - 1, "\n")  # -1 for USA
+message("  Years: ", length(unique(dat.wbgt.summarised.merged.weighted.native.state$year)), "\n")
+
+# Top 5 states with largest disparities
+top5_disparities <- dat.wbgt.summarised.merged.weighted.native.state %>%
+  filter(STATE_NAME != 'USA') %>%
+  group_by(STATE_NAME) %>%
+  summarise(mean_diff = mean(wbgt_28_diff, na.rm = TRUE), .groups = 'drop') %>%
+  arrange(desc(mean_diff)) %>%
+  slice_head(n = 5)
+
+message("  Top 5 states with largest disparities:\n")
+for(i in 1:nrow(top5_disparities)) {
+  message("    ", i, ". ", top5_disparities$STATE_NAME[i], ": ", 
+          round(top5_disparities$mean_diff[i], 2), " days/year\n")
+}
+
+# Load shapefile data and join to get territory names
+shapefile.data <- readRDS(file.path(project.folder, "data/processed/shapefile_data_all.rds"))
+
+# Join territory names - remove any existing NAME columns first to avoid conflicts
+dat.wbgt.summarised.regression.output <- dat.wbgt.summarised.regression.output %>%
+  select(-any_of(c("NAME", "territory_name"))) %>%
+  left_join(shapefile.data %>% select(GEOID, NAME), by = c("native_id" = "GEOID")) %>%
+  rename(territory_name = NAME)
+
+dat.wbgt.summarised.regression.disparity.output <- dat.wbgt.summarised.regression.disparity.output %>%
+  select(-any_of(c("NAME", "territory_name"))) %>%
+  left_join(shapefile.data %>% select(GEOID, NAME), by = c("native_id" = "GEOID")) %>%
+  rename(territory_name = NAME)
+
+# Panel b - Total change over time
+message("Panel b - Total Change in Heat Exposure:\n")
+message("  Territories: ", nrow(dat.wbgt.summarised.regression.output), "\n")
+
+mean_total_change <- mean(dat.wbgt.summarised.regression.output$total_change_wbgt_28, na.rm = TRUE)
+message("  Mean total change: ", round(mean_total_change, 1), " days\n")
+
+# Top 5 territories with largest total change
+top5_total <- dat.wbgt.summarised.regression.output %>%
+  arrange(desc(total_change_wbgt_28)) %>%
+  slice_head(n = 5)
+
+message("  Top 5 territories with largest total change:\n")
+for(i in 1:nrow(top5_total)) {
+  message("    ", i, ". ", top5_total$territory_name[i], ": ", 
+          round(top5_total$total_change_wbgt_28[i], 1), " days\n")
+}
+message("\n")
+
+# Panel c - Disparity change over time
+message("Panel c - Change in Native-State Disparity:\n")
+message("  Territories: ", nrow(dat.wbgt.summarised.regression.disparity.output), "\n")
+
+mean_disparity_change <- mean(dat.wbgt.summarised.regression.disparity.output$total_change_disparity_wbgt_28, na.rm = TRUE)
+message("  Mean disparity change: ", round(mean_disparity_change, 1), " days\n")
+
+# Top 5 territories with largest disparity change
+top5_disparity <- dat.wbgt.summarised.regression.disparity.output %>%
+  arrange(desc(total_change_disparity_wbgt_28)) %>%
+  slice_head(n = 5)
+
+message("  Top 5 territories with largest disparity change:\n")
+for(i in 1:nrow(top5_disparity)) {
+  message("    ", i, ". ", top5_disparity$territory_name[i], ": ", 
+          round(top5_disparity$total_change_disparity_wbgt_28[i], 1), " days\n")
+}
+```

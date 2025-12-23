@@ -1,0 +1,6 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+data/wbgt/weighted_area_raster_state_wbgtmax_daily_1982_2020.rds

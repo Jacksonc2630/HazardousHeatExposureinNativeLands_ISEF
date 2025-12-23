@@ -1,0 +1,156 @@
+---
+title: "Figure 1"
+output: html_document
+---
+
+## Load file locations
+```{r include=FALSE}
+rm(list=ls())
+project.folder = paste0(print(here::here()),'/')
+source(paste0(project.folder,'create_folder_structure.R'))
+source(paste0(functions.folder,'script_initiate.R'))
+```
+
+## Load packages
+```{r, message=FALSE}
+library(data.table)
+library(ggplot2)
+library(rgdal)
+library(sf)
+library(dplyr)
+library(tidyr)
+library(cowplot)
+library(MetBrewer)
+library(scales)
+library(readr)
+```
+
+## Prepare map structure
+```{r}
+# for map theme to plot in ggplot
+theme_map = function(base_size=10, base_family=""){
+    require(grid)
+    theme_bw(base_size=base_size,base_family=base_family) %+replace%
+    theme(axis.line=element_blank(),
+    axis.text=element_blank(),
+    axis.ticks=element_blank(),
+    axis.title=element_blank(),
+    panel.background=element_blank(),
+    panel.border=element_blank(),
+    panel.grid=element_blank(),
+    panel.margin=unit(0,"lines"),
+    plot.background=element_blank(),
+    legend.position = 'bottom'
+    )
+}
+```
+
+## Load WBGT regression file
+```{r}
+dat.wbgt.summarised.regression = readRDS(paste0(wbgt.folder,'weighted_area_raster_native_wbgtmax_daily_',start_year_wbgt,'_',end_year_wbgt,'_regression_analysis.rds')) %>%
+  mutate(native_id = as.integer(as.character(native_id)))
+```
+
+## Load US native shapefile for mapping
+```{r}
+# load shapefile of entire United States by native
+us.main = readOGR(dsn=paste0(project.folder,"data/shapefiles/native_boundaries/"),
+                           layer="tl_2020_us_aitsn")
+
+us.main = spTransform(us.main, CRS("+proj=laea +lat_0=45 +lon_0=-100 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"))
+
+# fortify to prepare for plotting in ggplot
+map = fortify(us.main)
+
+# extract data from shapefile
+us.main@data$id = rownames(us.main@data) 
+shapefile.data = us.main@data
+
+# merge selected data to map_create dataframe for colouring of ggplot
+USA.df = merge(map, shapefile.data, by='id')
+USA.df$native_id = as.integer(as.character(USA.df$GEOID))
+```
+
+## Load WBGT over time file
+```{r}
+dat.wbgt.summarised = readRDS(paste0(wbgt.folder,'weighted_area_raster_native_wbgtmax_daily_',start_year_wbgt,'_',end_year_wbgt,'_over_time.rds'))
+```
+
+## Load US state shapefile for mapping
+```{r}
+us = readOGR(dsn=paste0(data.folder,"shapefiles/states"),layer="states")
+
+# reproject shapefile
+us_aea = spTransform(us, CRS("+proj=laea +lat_0=45 +lon_0=-100 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"))
+us_aea = us
+us_aea@data$id = rownames(us_aea@data)
+
+# only keep mainland US States
+us_aea = us_aea[us_aea$STATE_FIPS %in% states_included,]
+us_aea = spTransform(us_aea, CRS("+proj=laea +lat_0=45 +lon_0=-100 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"))
+
+us_aea = fortify(us_aea)
+```
+
+## Prepare summary maps
+```{r}
+# merge map with mean values
+USA.df.merged = left_join(USA.df,dat.wbgt.summarised.regression,by='native_id')
+USA.df.merged = with(USA.df.merged, USA.df.merged[order(id,order),])
+```
+
+## Prepare colors and legends of maps
+```{r}
+legend_create_count_last_5_years = function(threshold){
+  paste0('Mean annual number of dangerous hot-humid\ndays (WBGT > ',threshold,'°C) during ',(end_year_wbgt-4),'-',end_year_wbgt)
+}
+
+plot_last_5_years = function(threshold_chosen,legend_chosen=0){
+  p = ggplot() +
+    geom_polygon(data=us_aea,aes(x=long,y=lat,group=group),fill='grey35',color='black',size=0.5) +
+    geom_polygon(data=USA.df.merged,aes(x=long,y=lat,group=group,
+                                        fill=get(paste0('wbgt_',threshold_chosen,'_',(end_year_wbgt-4),'_',end_year_wbgt))),size=0) +
+    scale_fill_gradientn(colors=rev(MetBrewer::met.brewer('Tam')), 
+                         limits = c(0, max(USA.df.merged$wbgt_26_2016_2020, 
+                                          USA.df.merged$wbgt_30_2016_2020, 
+                                          na.rm=TRUE)),
+                         na.value = "grey35") +
+    coord_fixed() + xlab('') + ylab('') + theme_bw() +
+    theme(panel.grid.major = element_blank(),
+        axis.text.x = element_text(angle=90), axis.ticks.x=element_blank(),legend.text=element_text(size=5),
+        panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"),
+        panel.border = element_rect(colour = "black"),strip.background = element_blank(),legend.justification='center',
+        legend.position = 'bottom', legend.background = element_rect(fill="white", size=.5, linetype="dotted")) +
+    theme_map()
+  
+  if(legend_chosen==0){
+    p = p +
+          guides(fill=FALSE)
+  }
+  if(legend_chosen==1){
+    p = p +
+          guides(fill = guide_colorbar(direction = "horizontal", title.position="left",barwidth = 10,barheight = 1,title.vjust = 0.8, 
+                                  title = legend_create_count_last_5_years(threshold_chosen)),legend.text=element_text(size=5)) 
+    }  
+    return(p)
+}
+plot.count.end.year.legend = cowplot::get_legend(plot_last_5_years(26,1))
+plot.count.last.5.years.26 = plot_last_5_years(26,1)
+plot.count.last.5.years.28 = plot_last_5_years(28,1)
+plot.count.last.5.years.30 = plot_last_5_years(30,1)
+```
+
+## Plot
+```{r}
+pdf(paste0(wbgtmax.folder,'Figure_1.pdf'),paper='a4r',width=0,height=0)
+plot_grid(plot.count.last.5.years.26, plot.count.last.5.years.28, 
+          label_size = 14 ,
+          label_x = -0.02, label_y = 1,
+          labels = c('(a)', '(b)'))
+dev.off()
+
+plot_grid(plot.count.last.5.years.26, plot.count.last.5.years.28, 
+          label_size = 14 ,
+          label_x = -0.02, label_y = 1,
+          labels = c('(a)', '(b)'))
+```
